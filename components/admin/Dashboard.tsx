@@ -45,7 +45,7 @@ export default function Dashboard({ shop, toast }: { shop: any; toast: (m: strin
     const r = await fetch('/api/meta-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.session?.access_token },
       body: JSON.stringify({ shop: shop.id, from: range[0] < addDays(iso(new Date()), -89) ? addDays(iso(new Date()), -89) : range[0], to: range[1] }) }).then((x) => x.json()).catch(() => ({ error: 'Connexion impossible' }));
     setSyncing(false);
-    if (r.error) return toast(r.error === 'NOT_CONNECTED' ? 'Connectez d’abord Meta Ads dans l’onglet Boutique.' : 'Meta : ' + r.error);
+    if (r.error) return toast(r.error === 'NOT_CONNECTED' ? 'Connectez d’abord Meta Ads dans l’onglet Boutique.' : /token|session|OAuth/i.test(r.error) ? 'Meta refuse le jeton : vérifiez-le dans l’onglet Boutique.' : /reduce the amount/i.test(r.error) ? 'Meta demande moins de données : choisissez une période plus courte (7 jours) et réessayez.' : 'Meta : ' + r.error);
     toast('Meta synchronisé : ' + fmt(r.total) + (r.unmatched ? ' (dont ' + fmt(r.unmatched) + ' sans produit)' : ''));
     setInteg({ ...integ, last_sync_at: new Date().toISOString() }); load();
   }

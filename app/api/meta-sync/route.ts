@@ -10,11 +10,16 @@ const KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_
 const GRAPH = 'https://graph.facebook.com/v23.0';
 const UUID = /\/produit\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
-async function graphAll(url: string, max = 20) {
-  const out: any[] = []; let next: string | null = url; let n = 0;
+// Pagination Meta, avec réduction automatique de la taille des pages si Meta demande « moins de données ».
+async function graphAll(url: string, limit = 25, max = 60) {
+  const out: any[] = []; let lim = limit; let next: string | null = url + '&limit=' + lim; let n = 0;
   while (next && n++ < max) {
     const r = await fetch(next, { cache: 'no-store' }); const j = await r.json();
-    if (j.error) throw new Error(j.error.message || 'Erreur Meta');
+    if (j.error) {
+      const tooMuch = j.error.code === 1 || /reduce the amount of data/i.test(j.error.message || '');
+      if (tooMuch && lim > 5) { lim = Math.max(5, Math.floor(lim / 2)); next = next.replace(/([?&]limit=)\d+/, '$1' + lim); continue; }
+      throw new Error(j.error.message || 'Erreur Meta');
+    }
     out.push(...(j.data || [])); next = j.paging?.next || null;
   }
   return out;
@@ -42,12 +47,12 @@ export async function POST(req: Request) {
     if (acc.error) throw new Error(acc.error.message);
     const fx = acc.currency === 'XOF' ? 1 : acc.currency === 'EUR' ? 655.957 : Number(integ.fx_rate) || 1;
 
-    const ads = await graphAll(`${GRAPH}/${act}/ads?fields=id,name,creative{object_story_spec,asset_feed_spec,link_url,object_url,url_tags}&limit=200&access_token=${tok}`);
+    const ads = await graphAll(`${GRAPH}/${act}/ads?fields=id,creative{link_url,object_url,object_story_spec{link_data{link},video_data{call_to_action{value{link}}},template_data{link}},asset_feed_spec{link_urls{website_url}}}&access_token=${tok}`, 25);
     const adProduct = new Map<string, string | null>();
     for (const a of ads) { const m = JSON.stringify(a.creative || {}).replace(/\\\//g, '/').match(UUID); adProduct.set(a.id, m && mine.has(m[1].toLowerCase()) ? m[1].toLowerCase() : null); }
 
     const tr = encodeURIComponent(JSON.stringify({ since, until }));
-    const rows = await graphAll(`${GRAPH}/${act}/insights?level=ad&fields=ad_id,ad_name,spend,impressions,clicks&time_increment=1&time_range=${tr}&limit=500&access_token=${tok}`);
+    const rows = await graphAll(`${GRAPH}/${act}/insights?level=ad&fields=ad_id,ad_name,spend,impressions,clicks&time_increment=1&time_range=${tr}&access_token=${tok}`, 100);
     const up = rows.map((r: any) => ({
       shop_id: shopId, product_id: adProduct.get(r.ad_id) ?? null, day: r.date_start, source: 'meta', ref: 'ad:' + r.ad_id,
       label: String(r.ad_name || '').slice(0, 120), amount: Math.round(Number(r.spend || 0) * fx),
