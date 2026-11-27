@@ -188,6 +188,105 @@ create table if not exists transport_depots (
 
 -- Mises à jour sans risque si une version précédente du script a déjà été lancée.
 alter table shops add column if not exists apdp_number text;
+alter table shops add column if not exists logo_url text;
+alter table shops add column if not exists stamp_url text;
+alter table shops add column if not exists accent text not null default '#169B45';
+alter table shops add column if not exists phone2 text;
+alter table shops add column if not exists phone3 text;
+alter table shops add column if not exists owner_phone text;
+do $$ begin
+  alter table shops add constraint shops_accent_chk check (accent ~ '^#[0-9A-Fa-f]{6}$');
+exception when duplicate_object then null; end $$;
+
+-- Factures et proformas. Numérotées par boutique, par type et par année (FA-2026-0001, PF-2026-0001).
+create table if not exists invoices (
+  id             uuid primary key default gen_random_uuid(),
+  shop_id        uuid not null references shops(id) on delete cascade,
+  kind           text not null check (kind in ('facture','proforma')),
+  year           int  not null,
+  seq            int  not null,
+  number         text not null,
+  order_id       uuid references orders(id) on delete set null,
+  from_invoice   uuid references invoices(id) on delete set null,
+  client_name    text not null,
+  client_phone   text,
+  client_address text,
+  items          jsonb not null,
+  shipping       int  not null default 0 check (shipping >= 0),
+  total          int  not null check (total >= 0),
+  note           text,
+  created_at     timestamptz not null default now(),
+  unique (shop_id, kind, year, seq)
+);
+create index if not exists invoices_shop_idx on invoices(shop_id, created_at desc);
+
+-- Page produit enrichie : prix barré, accroche, compte à rebours réel, affichage du stock, blocs (images, GIF, vidéos, textes, FAQ).
+alter table products add column if not exists compare_price int;
+alter table products add column if not exists tagline text;
+alter table products add column if not exists promo_ends_at timestamptz;
+alter table products add column if not exists stock_display text not null default 'low';
+alter table products add column if not exists low_stock_at int not null default 10;
+alter table products add column if not exists blocks jsonb not null default '[]'::jsonb;
+do $$ begin
+  alter table products add constraint products_compare_chk check (compare_price is null or compare_price > price);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table products add constraint products_stock_display_chk check (stock_display in ('never','low','always'));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table products add constraint products_blocks_chk check (jsonb_typeof(blocks) = 'array' and jsonb_array_length(blocks) <= 40);
+exception when duplicate_object then null; end $$;
+
+alter table shops add column if not exists announcement text;
+alter table shops add column if not exists delivery_promise text not null default '24 à 48 h';
+
+alter table orders add column if not exists call_slot text;
+alter table orders add column if not exists source text;
+do $$ begin
+  alter table orders add constraint orders_call_slot_chk check (call_slot is null or call_slot in ('matin','apres_midi','soir','indifferent'));
+exception when duplicate_object then null; end $$;
+
+-- Avis clients réels (ajoutés par le vendeur : texte, capture WhatsApp, photo du colis).
+create table if not exists product_reviews (
+  id          uuid primary key default gen_random_uuid(),
+  shop_id     uuid not null references shops(id) on delete cascade,
+  product_id  uuid not null references products(id) on delete cascade,
+  author      text not null check (length(trim(author)) between 2 and 60),
+  city        text,
+  rating      int  not null default 5 check (rating between 1 and 5),
+  body        text,
+  image_url   text,
+  visible     boolean not null default true,
+  created_at  timestamptz not null default now()
+);
+create index if not exists reviews_product_idx on product_reviews(product_id, created_at desc);
+
+-- Dépenses publicitaires par produit et par jour (Meta automatique, ou saisie manuelle).
+create table if not exists product_ad_spend (
+  id          bigint generated always as identity primary key,
+  shop_id     uuid not null references shops(id) on delete cascade,
+  product_id  uuid references products(id) on delete set null,
+  day         date not null,
+  source      text not null default 'manuel' check (source in ('meta','tiktok','manuel')),
+  ref         text not null,
+  label       text,
+  amount      int  not null default 0 check (amount >= 0),
+  impressions int  not null default 0,
+  clicks      int  not null default 0,
+  updated_at  timestamptz not null default now(),
+  unique (shop_id, day, source, ref)
+);
+create index if not exists ad_spend_day_idx on product_ad_spend(shop_id, day);
+
+-- Connexion Meta Ads de la boutique (jeton en lecture seule « ads_read »). Lisible par le vendeur uniquement.
+create table if not exists shop_integrations (
+  shop_id        uuid primary key references shops(id) on delete cascade,
+  meta_account   text check (meta_account is null or meta_account ~ '^[0-9]{5,25}$'),
+  meta_token     text,
+  fx_rate        numeric not null default 1 check (fx_rate > 0),
+  last_sync_at   timestamptz,
+  last_sync_note text
+);
 alter table delivery_zones add column if not exists mode text not null default 'livreur';
 alter table delivery_zones add column if not exists depot_id uuid references transport_depots(id) on delete set null;
 do $$ begin
@@ -348,16 +447,32 @@ create trigger orders_log_trg after insert or update on orders
 -- =====================================================================
 
 -- Tout ce qu'il faut pour afficher la boutique. Jamais le prix d'achat.
+-- Prix réel : après la fin de la promotion, le prix barré redevient le prix (le compte à rebours dit vrai).
+create or replace function product_price(p products) returns int
+language sql stable set search_path = public as $$
+  select case when p.promo_ends_at is not null and p.compare_price is not null and p.promo_ends_at <= now()
+              then p.compare_price else p.price end
+$$;
+
 create or replace function store_get(p_slug text) returns json
 language sql stable security definer set search_path = public as $$
   select json_build_object(
     'shop', json_build_object('name', s.name, 'slug', s.slug, 'currency', s.currency,
              'whatsapp', s.whatsapp, 'legal_name', s.legal_name, 'rccm', s.rccm, 'nif', s.nif,
              'address', s.address, 'email', s.email, 'refund_days', s.refund_days, 'apdp_number', s.apdp_number,
-             'pixel_meta', s.pixel_meta, 'pixel_tiktok', s.pixel_tiktok),
+             'pixel_meta', s.pixel_meta, 'pixel_tiktok', s.pixel_tiktok,
+             'logo_url', s.logo_url, 'accent', s.accent, 'phone2', s.phone2, 'phone3', s.phone3,
+             'announcement', s.announcement, 'delivery_promise', s.delivery_promise),
     'products', coalesce((select json_agg(json_build_object(
-             'id', p.id, 'name', p.name, 'description', p.description, 'price', p.price,
-             'stock', p.stock, 'option_label', p.option_label, 'options', p.options, 'images', p.images,
+             'id', p.id, 'name', p.name, 'description', p.description, 'price', product_price(p),
+             'compare_price', case when product_price(p) = p.price then p.compare_price end,
+             'promo_ends_at', case when p.promo_ends_at > now() and p.compare_price is not null then p.promo_ends_at end,
+             'tagline', p.tagline, 'blocks', p.blocks,
+             'stock', p.stock, 'stock_display', p.stock_display, 'low_stock_at', p.low_stock_at,
+             'option_label', p.option_label, 'options', p.options, 'images', p.images,
+             'reviews', coalesce((select json_agg(json_build_object('author', r.author, 'city', r.city, 'rating', r.rating,
+                          'body', r.body, 'image_url', r.image_url) order by r.created_at desc)
+                        from product_reviews r where r.product_id = p.id and r.visible), '[]'::json),
              'offers', coalesce((select json_agg(json_build_object('quantity', o.quantity,
                           'bundle_price', o.bundle_price, 'free_shipping', o.free_shipping,
                           'highlight', o.highlight) order by o.quantity)
@@ -373,11 +488,13 @@ $$;
 
 -- Passer commande. Le prix est recalculé ici : le client ne peut pas le modifier.
 drop function if exists place_order(text, uuid, int, text, text, text, uuid, text, boolean, boolean);
+drop function if exists place_order(text, uuid, int, text, text, text, uuid, text, boolean, boolean, double precision, double precision);
 create or replace function place_order(
   p_slug text, p_product uuid, p_quantity int, p_option text,
   p_name text, p_phone text, p_zone uuid, p_landmark text,
   p_optin boolean, p_ready boolean,
-  p_lat double precision default null, p_lng double precision default null
+  p_lat double precision default null, p_lng double precision default null,
+  p_slot text default null, p_source text default null
 ) returns json
 language plpgsql security definer set search_path = public as $$
 declare
@@ -413,7 +530,7 @@ begin
     v_amount := o.bundle_price;
     v_fee := case when o.free_shipping then 0 else z.fee end;
   else
-    v_amount := p.price * p_quantity;
+    v_amount := product_price(p) * p_quantity;
     v_fee := z.fee;
   end if;
 
@@ -431,10 +548,12 @@ begin
 
   insert into orders (shop_id, number, customer_name, customer_phone, zone_id, landmark,
                       marketing_optin, optin_at, ready_confirmed, shipping_fee, customer_lat, customer_lng,
-                      depot_id)
+                      depot_id, call_slot, source)
   values (s.id, v_num, trim(p_name), v_phone, z.id, trim(p_landmark),
           coalesce(p_optin, false), case when p_optin then now() end, true, v_fee, p_lat, p_lng,
-          case when z.mode = 'bus' then z.depot_id end)
+          case when z.mode = 'bus' then z.depot_id end,
+          case when p_slot in ('matin','apres_midi','soir','indifferent') then p_slot end,
+          nullif(left(regexp_replace(lower(coalesce(p_source, '')), '[^a-z0-9_-]', '', 'g'), 30), ''))
   returning id into v_order;
 
   insert into order_items (order_id, product_id, product_name, option, quantity, amount, unit_cost)
@@ -745,6 +864,158 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- =====================================================================
+--  FACTURES ET PROFORMAS
+-- =====================================================================
+drop function if exists create_invoice(uuid, text, text, text, text, jsonb, int, text, uuid, uuid);
+create or replace function create_invoice(
+  p_shop uuid, p_kind text, p_client_name text, p_client_phone text, p_client_address text,
+  p_items jsonb, p_shipping int default 0, p_note text default null, p_order uuid default null, p_from uuid default null
+) returns invoices
+language plpgsql security definer set search_path = public as $$
+declare
+  v_year int := extract(year from (now() at time zone 'Africa/Bamako'))::int;
+  v_seq int; v_total bigint := 0; v_items jsonb := '[]'::jsonb; it jsonb; v_q int; v_p int; v_row invoices;
+begin
+  if not is_shop_admin(p_shop) then raise exception 'FORBIDDEN'; end if;
+  if p_kind not in ('facture','proforma') then raise exception 'BAD_KIND'; end if;
+  if length(trim(coalesce(p_client_name,''))) < 2 then raise exception 'CLIENT_REQUIRED'; end if;
+  if jsonb_typeof(p_items) is distinct from 'array' or jsonb_array_length(p_items) = 0 or jsonb_array_length(p_items) > 60 then
+    raise exception 'ITEMS_REQUIRED'; end if;
+  for it in select value from jsonb_array_elements(p_items) loop
+    begin v_q := (it->>'qty')::int; v_p := (it->>'price')::int;
+    exception when others then raise exception 'BAD_ITEM'; end;
+    if length(trim(coalesce(it->>'label',''))) = 0 or v_q is null or v_q <= 0 or v_p is null or v_p < 0 then
+      raise exception 'BAD_ITEM'; end if;
+    v_items := v_items || jsonb_build_array(jsonb_build_object('label', left(trim(it->>'label'), 160), 'qty', v_q, 'price', v_p));
+    v_total := v_total + v_q::bigint * v_p;
+  end loop;
+  if coalesce(p_shipping, 0) < 0 then raise exception 'BAD_ITEM'; end if;
+  v_total := v_total + coalesce(p_shipping, 0);
+  if v_total > 2000000000 then raise exception 'BAD_ITEM'; end if;
+  if p_order is not null and not exists (select 1 from orders where id = p_order and shop_id = p_shop) then
+    raise exception 'BAD_ORDER'; end if;
+  perform pg_advisory_xact_lock(hashtext(p_shop::text || p_kind || v_year::text));
+  select coalesce(max(seq), 0) + 1 into v_seq from invoices where shop_id = p_shop and kind = p_kind and year = v_year;
+  insert into invoices (shop_id, kind, year, seq, number, order_id, from_invoice, client_name, client_phone,
+                        client_address, items, shipping, total, note)
+  values (p_shop, p_kind, v_year, v_seq,
+          case p_kind when 'facture' then 'FA' else 'PF' end || '-' || v_year || '-' || lpad(v_seq::text, 4, '0'),
+          p_order, p_from, trim(p_client_name), nullif(trim(coalesce(p_client_phone,'')), ''),
+          nullif(trim(coalesce(p_client_address,'')), ''), v_items, coalesce(p_shipping, 0), v_total::int,
+          nullif(trim(coalesce(p_note,'')), ''))
+  returning * into v_row;
+  return v_row;
+end $$;
+
+-- Facture (ou proforma) d'une commande : articles, frais de livraison et client repris tels quels.
+create or replace function invoice_from_order(p_order uuid, p_kind text default 'facture') returns invoices
+language plpgsql security definer set search_path = public as $$
+declare o orders; v_items jsonb; v_addr text; v_existing invoices;
+begin
+  select * into o from orders where id = p_order;
+  if not found or not is_shop_admin(o.shop_id) then raise exception 'FORBIDDEN'; end if;
+  select * into v_existing from invoices where order_id = p_order and kind = p_kind order by created_at limit 1;
+  if found then return v_existing; end if;
+  select jsonb_agg(case when i.amount % i.quantity = 0
+           then jsonb_build_object('label', i.product_name || case when coalesce(i.option,'') <> '' then ' (' || i.option || ')' else '' end,
+                                   'qty', i.quantity, 'price', i.amount / i.quantity)
+           else jsonb_build_object('label', i.quantity || ' × ' || i.product_name || case when coalesce(i.option,'') <> '' then ' (' || i.option || ')' else '' end,
+                                   'qty', 1, 'price', i.amount) end order by i.is_upsell, i.id)
+    into v_items from order_items i where i.order_id = p_order;
+  select z.city || case when z.label <> z.city then ' · ' || z.label else '' end || ' — ' || o.landmark
+    into v_addr from delivery_zones z where z.id = o.zone_id;
+  return create_invoice(o.shop_id, p_kind, o.customer_name, '+223 ' || o.customer_phone, v_addr, v_items,
+                        o.shipping_fee, 'Commande n° ' || o.number, p_order, null);
+end $$;
+
+-- Proforma accepté → facture (mêmes lignes, nouveau numéro).
+create or replace function invoice_convert(p_invoice uuid) returns invoices
+language plpgsql security definer set search_path = public as $$
+declare v invoices; v_existing invoices;
+begin
+  select * into v from invoices where id = p_invoice;
+  if not found or not is_shop_admin(v.shop_id) then raise exception 'FORBIDDEN'; end if;
+  if v.kind <> 'proforma' then raise exception 'BAD_KIND'; end if;
+  select * into v_existing from invoices where from_invoice = p_invoice limit 1;
+  if found then return v_existing; end if;
+  return create_invoice(v.shop_id, 'facture', v.client_name, v.client_phone, v.client_address, v.items,
+                        v.shipping, v.note, v.order_id, v.id);
+end $$;
+
+-- =====================================================================
+--  TABLEAU DE BORD : chiffres d'une période, par jour et par produit
+-- =====================================================================
+create or replace function dashboard(p_shop uuid, p_from date, p_to date) returns json
+language plpgsql stable security definer set search_path = public as $$
+declare r json;
+begin
+  if not is_shop_admin(p_shop) then raise exception 'FORBIDDEN'; end if;
+  with o as (
+    select o.*, order_total(o.id) as total,
+           (select i.product_id from order_items i where i.order_id = o.id order by i.is_upsell, i.id limit 1) as pid,
+           (select coalesce(sum(i.unit_cost * i.quantity), 0) from order_items i where i.order_id = o.id) as goods,
+           z.driver_cost
+      from orders o join delivery_zones z on z.id = o.zone_id
+     where o.shop_id = p_shop and o.created_at >= p_from and o.created_at < p_to + 1
+  ), a as (
+    select * from product_ad_spend where shop_id = p_shop and day between p_from and p_to
+  ), per as (
+    select pr.id, pr.name, pr.stock,
+      (select count(*) from o where o.pid = pr.id) as orders,
+      (select count(*) from o where o.pid = pr.id and o.status in ('confirmee','en_route','livree','refusee')) as confirmed,
+      (select count(*) from o where o.pid = pr.id and o.status = 'livree') as delivered,
+      (select coalesce(sum(total), 0) from o where o.pid = pr.id and o.status = 'livree') as revenue,
+      (select coalesce(sum(goods), 0) from o where o.pid = pr.id and o.status = 'livree') as goods,
+      (select coalesce(sum(driver_cost), 0) from o where o.pid = pr.id and o.status in ('livree','refusee')) as delivery,
+      (select coalesce(sum(amount), 0) from a where a.product_id = pr.id) as ads
+    from products pr where pr.shop_id = p_shop
+  )
+  select json_build_object(
+    'from', p_from, 'to', p_to,
+    'orders',    (select count(*) from o),
+    'pending',   (select count(*) from o where status in ('a_appeler','pas_reponse','a_rappeler')),
+    'confirmed', (select count(*) from o where status in ('confirmee','en_route','livree','refusee')),
+    'delivered', (select count(*) from o where status = 'livree'),
+    'refused',   (select count(*) from o where status = 'refusee'),
+    'cancelled', (select count(*) from o where status = 'annulee'),
+    'in_progress', (select count(*) from o where status in ('confirmee','en_route')),
+    'revenue',   (select coalesce(sum(total), 0) from o where status = 'livree'),
+    'pipeline',  (select coalesce(sum(total), 0) from o where status in ('confirmee','en_route')),
+    'goods',     (select coalesce(sum(goods), 0) from o where status = 'livree'),
+    'delivery',  (select coalesce(sum(driver_cost), 0) from o where status in ('livree','refusee')),
+    'ads',       (select coalesce(sum(amount), 0) from a),
+    'ads_unassigned', (select coalesce(sum(amount), 0) from a where product_id is null),
+    'from_ads',  (select count(*) from o where source in ('facebook','fb','ig','instagram','meta','tiktok')),
+    'cash_with_drivers', (select coalesce(sum(order_total(id)), 0) from orders
+                           where shop_id = p_shop and status = 'livree' and not cash_remitted),
+    'days', coalesce((select json_agg(json_build_object('day', d::date,
+              'orders', (select count(*) from o where o.created_at::date = d::date),
+              'delivered', (select count(*) from o where o.created_at::date = d::date and o.status = 'livree'),
+              'revenue', (select coalesce(sum(total), 0) from o where o.created_at::date = d::date and o.status = 'livree'),
+              'ads', (select coalesce(sum(amount), 0) from a where a.day = d::date)) order by d)
+             from generate_series(p_from, p_to, interval '1 day') d), '[]'::json),
+    'products', coalesce((select json_agg(json_build_object('id', id, 'name', name, 'stock', stock, 'orders', orders,
+              'confirmed', confirmed, 'delivered', delivered, 'revenue', revenue, 'goods', goods,
+              'delivery', delivery, 'ads', ads, 'profit', revenue - goods - delivery - ads)
+              order by orders desc, ads desc) from per where orders > 0 or ads > 0), '[]'::json)
+  ) into r;
+  return r;
+end $$;
+
+-- Saisie manuelle de la pub d'un produit pour un jour (remplace la valeur du jour).
+create or replace function set_manual_spend(p_shop uuid, p_product uuid, p_day date, p_amount int) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_shop_admin(p_shop) then raise exception 'FORBIDDEN'; end if;
+  if p_product is not null and not exists (select 1 from products where id = p_product and shop_id = p_shop) then
+    raise exception 'PRODUCT_NOT_FOUND'; end if;
+  if p_amount is null or p_amount < 0 then raise exception 'BAD_AMOUNT'; end if;
+  insert into product_ad_spend (shop_id, product_id, day, source, ref, amount)
+  values (p_shop, p_product, p_day, 'manuel', 'manuel:' || coalesce(p_product::text, 'global'), p_amount)
+  on conflict (shop_id, day, source, ref) do update set amount = excluded.amount, updated_at = now();
+end $$;
+
+-- =====================================================================
 --  SÉCURITÉ PAR LIGNE (RLS) : chaque boutique ne voit que ses données
 -- =====================================================================
 alter table shops              enable row level security;
@@ -760,6 +1031,10 @@ alter table ad_spend           enable row level security;
 alter table driver_locations   enable row level security;
 alter table transport_depots   enable row level security;
 alter table push_subscriptions enable row level security;
+alter table invoices           enable row level security;
+alter table product_reviews    enable row level security;
+alter table product_ad_spend   enable row level security;
+alter table shop_integrations  enable row level security;
 
 drop policy if exists shops_admin on shops;
 create policy shops_admin on shops for all to authenticated
@@ -816,6 +1091,23 @@ drop policy if exists push_own on push_subscriptions;
 create policy push_own on push_subscriptions for all to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 
+drop policy if exists reviews_admin on product_reviews;
+create policy reviews_admin on product_reviews for all to authenticated
+  using (is_shop_admin(shop_id))
+  with check (is_shop_admin(shop_id) and exists (select 1 from products p where p.id = product_id and p.shop_id = product_reviews.shop_id));
+drop policy if exists ad_spend_admin on product_ad_spend;
+create policy ad_spend_admin on product_ad_spend for all to authenticated
+  using (is_shop_admin(shop_id))
+  with check (is_shop_admin(shop_id) and (product_id is null or exists (select 1 from products p where p.id = product_id and p.shop_id = product_ad_spend.shop_id)));
+drop policy if exists integrations_admin on shop_integrations;
+create policy integrations_admin on shop_integrations for all to authenticated
+  using (is_shop_admin(shop_id)) with check (is_shop_admin(shop_id));
+
+drop policy if exists invoices_read on invoices;
+create policy invoices_read on invoices for select to authenticated using (is_shop_admin(shop_id));
+drop policy if exists invoices_delete on invoices;
+create policy invoices_delete on invoices for delete to authenticated using (is_shop_admin(shop_id));
+
 -- ---------- Droits ----------
 revoke all on all tables in schema public from anon;
 grant select, insert, update, delete on all tables in schema public to authenticated;
@@ -823,7 +1115,7 @@ grant select, insert, update, delete on all tables in schema public to authentic
 revoke execute on all functions in schema public from public;
 revoke execute on all functions in schema public from anon;
 grant execute on function store_get(text), track_order(text, int, text),
-  place_order(text, uuid, int, text, text, text, uuid, text, boolean, boolean, double precision, double precision),
+  place_order(text, uuid, int, text, text, text, uuid, text, boolean, boolean, double precision, double precision, text, text),
   add_upsell(text, int, text) to anon, authenticated;
 grant execute on function driver_ping(double precision, double precision, int),
   shop_driver_positions(uuid) to authenticated;
@@ -831,7 +1123,10 @@ grant execute on function create_shop(text, text), record_no_answer(uuid),
   invite_driver(uuid, text, text, text, uuid[]), set_driver_products(uuid, uuid[]),
   remove_driver(uuid), shop_profit(uuid, date, date), accept_invite(text, text, text),
   driver_deliveries(), driver_report(uuid, text, text), my_memberships(),
-  is_shop_admin(uuid), order_total(uuid), normalize_ml_phone(text) to authenticated;
+  is_shop_admin(uuid), order_total(uuid), normalize_ml_phone(text),
+  create_invoice(uuid, text, text, text, text, jsonb, int, text, uuid, uuid),
+  invoice_from_order(uuid, text), invoice_convert(uuid),
+  dashboard(uuid, date, date), set_manual_spend(uuid, uuid, date, int) to authenticated;
 
 -- Temps réel : le tableau de bord reçoit les nouvelles commandes instantanément.
 do $$ begin
