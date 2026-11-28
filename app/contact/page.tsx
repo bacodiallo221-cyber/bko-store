@@ -10,7 +10,7 @@ export default async function Contact() {
   const s = store.shop; const ps = phones(s);
   const wa = waLink(s.whatsapp, 'Bonjour ' + s.name + ', j’ai une question.');
   return (
-    <main className="wrap"><Header shop={s} />
+    <main className="wrap"><Header shop={s} categories={store.categories} active="contact" />
       <section className="hero"><span className="kicker">Contact</span><h1>Une question ? On vous répond.</h1>
         <p>Avant ou après votre commande, écrivez-nous sur WhatsApp ou appelez-nous. Une vraie personne vous accompagne jusqu’à la livraison.</p></section>
       <div className="cgrid">

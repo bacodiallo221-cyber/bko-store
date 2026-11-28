@@ -18,27 +18,49 @@ export function Countdown({ until, after }: { until: string; after: string }) {
   );
 }
 
-// Bouton « Commander » qui reste en bas de l'écran sur téléphone, jusqu'au formulaire.
+// Bouton « Commander » en bas de l'écran dès que le formulaire n'est plus visible (avant ou après).
 export function StickyCta({ label }: { label: string }) {
   const [show, setShow] = useState(false);
   useEffect(() => {
     const f = document.getElementById('commander'); if (!f) return;
-    const io = new IntersectionObserver(([e]) => setShow(!e.isIntersecting && e.boundingClientRect.top > 0), { threshold: 0 });
+    const io = new IntersectionObserver(([e]) => setShow(!e.isIntersecting), { threshold: 0 });
     io.observe(f); return () => io.disconnect();
   }, []);
   if (!show) return null;
   return <a href="#commander" className="sticky-cta">{label}</a>;
 }
 
-// Galerie avec compteur 1 / N.
+// Galerie glissable au doigt, avec points et compteur.
 export function Gallery({ images, name, badge }: { images: string[]; name: string; badge?: string | null }) {
   const [i, setI] = useState(0);
   if (!images?.length) return <div className="pic gal-main">{name.slice(0, 2).toUpperCase()}{badge && <span className="gal-badge">{badge}</span>}</div>;
+  const onScroll = (e: any) => { const el = e.currentTarget; setI(Math.round(el.scrollLeft / el.clientWidth)); };
+  const to = (k: number) => { const el = document.getElementById('gal-track'); el?.scrollTo({ left: k * el.clientWidth, behavior: 'smooth' }); };
   return (
-    <div>
-      <div className="pic gal-main"><img src={images[i]} alt={name} />{badge && <span className="gal-badge">{badge}</span>}
-        {images.length > 1 && <span className="gal-count mono">{i + 1} / {images.length}</span>}</div>
-      {images.length > 1 && <div className="thumbs">{images.map((u, k) => <button key={u} type="button" className={'thumb' + (k === i ? ' on' : '')} onClick={() => setI(k)} aria-label={'Photo ' + (k + 1)}><img src={u} alt="" loading="lazy" /></button>)}</div>}
+    <div className="gal">
+      <div className="gal-box">
+        <div className="gal-track" id="gal-track" onScroll={onScroll}>
+          {images.map((u, k) => <img key={u} src={u} alt={k === 0 ? name : ''} loading={k ? 'lazy' : 'eager'} />)}
+        </div>
+        {badge && <span className="gal-badge">{badge}</span>}
+        {images.length > 1 && <><span className="gal-count mono">{i + 1} / {images.length}</span>
+          <div className="gal-dots">{images.map((_, k) => <button key={k} type="button" aria-label={'Photo ' + (k + 1)} className={k === i ? 'on' : ''} onClick={() => to(k)} />)}</div></>}
+      </div>
+      {images.length > 1 && <>
+        <div className="thumbs">{images.map((u, k) => <button key={u} type="button" className={'thumb' + (k === i ? ' on' : '')} onClick={() => to(k)} aria-label={'Photo ' + (k + 1)}><img src={u} alt="" loading="lazy" /></button>)}</div></>}
     </div>
+  );
+}
+
+// Onglets sous le formulaire (Description, Avis, Livraison) : restent collés en haut pendant la lecture.
+export function Tabs({ tabs }: { tabs: { id: string; label: string; body: React.ReactNode }[] }) {
+  const [t, setT] = useState(tabs[0]?.id);
+  if (!tabs.length) return null;
+  return (
+    <section className="z-tabs-w" id="details">
+      <div className="z-tabs" role="tablist">{tabs.map((x) => <button key={x.id} type="button" role="tab" aria-selected={t === x.id} className={t === x.id ? 'on' : ''}
+        onClick={() => { setT(x.id); const el = document.getElementById('details'); if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{x.label}</button>)}</div>
+      {tabs.map((x) => <div key={x.id} role="tabpanel" hidden={t !== x.id} className="z-tp">{x.body}</div>)}
+    </section>
   );
 }

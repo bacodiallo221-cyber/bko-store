@@ -2,14 +2,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { sb } from '@/lib/supabase';
 import { fmt, zoneName, errText } from '@/lib/format';
-import { fmtPhone } from '@/lib/phone';
+import { fmtPhone, waLink } from '@/lib/phone';
 import { playSound, getPref } from '@/lib/sounds';
 import { Sheet, copy, when } from './ui';
 
 const CALL = ['a_appeler', 'pas_reponse', 'a_rappeler'];
 const LABEL: Record<string, string> = { a_appeler: 'À appeler', pas_reponse: 'Pas de réponse', a_rappeler: 'À rappeler', confirmee: 'Confirmée', en_route: 'Chez le livreur', livree: 'Livrée', refusee: 'Refusée', annulee: 'Annulée' };
 const TONE: Record<string, string> = { a_appeler: 'warn', pas_reponse: 'warn', a_rappeler: 'info', confirmee: 'info', en_route: 'ship', livree: 'ok', refusee: 'bad', annulee: 'mute' };
-const total = (o: any) => (o.order_items || []).reduce((a: number, i: any) => a + i.amount, 0) + o.shipping_fee;
+const total = (o: any) => (o.order_items || []).reduce((a: number, i: any) => a + i.amount, 0) + o.shipping_fee - (o.discount || 0);
 const itemsText = (o: any) => (o.order_items || []).map((i: any) => i.product_name + ' × ' + i.quantity).join(', ');
 const stLabel = (o: any) => o.status === 'en_route' && o.depot_id ? (o.handed_at ? 'Dans le car' : o.at_depot_at ? 'À la gare' : 'Vers la gare') : o.status === 'livree' && o.depot_id ? 'Récupérée' : LABEL[o.status];
 const hm = (t: string) => new Date(t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
@@ -34,11 +34,9 @@ export default function Orders({ shop, toast }: { shop: any; toast: (m: string) 
     const ch = sb().channel('orders-' + shop.id)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders', filter: 'shop_id=eq.' + shop.id }, (p: any) => {
         seen.current.add(p.new.id);
-        if (getPref('sndOn', true)) playSound(getPref('snd', 'tching'), getPref('twice', true) ? 2 : 1);
-        try { navigator.vibrate?.([160, 80, 160, 80, 240]); } catch {}
+        // le son, la vibration et la notification sont gérés par l'espace vendeur (Admin.tsx)
         setBanner({ n: p.new.number, name: p.new.customer_name });
         setTimeout(() => setBanner(null), 8000);
-        try { if (document.hidden && Notification.permission === 'granted') new Notification('Tching ! Nouvelle commande n° ' + p.new.number, { body: p.new.customer_name }); } catch {}
         setTimeout(load, 600);
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders', filter: 'shop_id=eq.' + shop.id }, (p: any) => {
@@ -77,7 +75,7 @@ export default function Orders({ shop, toast }: { shop: any; toast: (m: string) 
     return <div className="badges">{b.map(([t, l]) => <span key={l} className={'badge t-' + t}>{l}</span>)}</div>;
   };
   const action = (o: any) => {
-    if (CALL.includes(o.status)) return <button className="btn cta wide" onClick={() => setSheet({ k: 'call', o })}>Appeler{o.call_attempts ? ' (essai ' + (o.call_attempts + 1) + '/3)' : ''}</button>;
+    if (CALL.includes(o.status)) return <div className="oc-2"><button className="btn cta wide" onClick={() => setSheet({ k: 'call', o })}>Appeler{o.call_attempts ? ' (essai ' + (o.call_attempts + 1) + '/3)' : ''}</button><button className="btn wide" onClick={() => setSheet({ k: 'hand', list: [o] })}>{o.driver ? 'Relancer ' + o.driver.display_name.split(' ')[0] : 'Confier au livreur'}</button></div>;
     if (o.status === 'confirmee') return <button className="btn primary wide" onClick={() => setSheet({ k: 'ship', o })}>{o.depot_id ? 'Envoyer par car' : 'Envoyer au livreur'}</button>;
     if (o.status === 'en_route' && o.depot_id && o.handed_at) return <button className="btn primary wide" onClick={() => setSheet({ k: 'pickup', o })}>Le client a-t-il récupéré ?</button>;
     if (o.status === 'en_route') return <button className="btn wide" onClick={() => setSheet({ k: 'result', o })}>{o.depot_id ? 'Suivre le dépôt à la gare' : 'Résultat de la livraison'}</button>;
@@ -126,6 +124,8 @@ export default function Orders({ shop, toast }: { shop: any; toast: (m: string) 
         <NotifButton toast={toast} />
       </div>
       {!loaded ? <p className="muted">Chargement…</p> : show === 'done' ? group('Terminées', done) : <>
+        {calls.length > 0 && <div className="hand-bar"><div><b>Pas le temps d’appeler ?</b><span className="muted">Envoyez les {calls.length} client{calls.length > 1 ? 's' : ''} à appeler à un livreur sur WhatsApp : nom, numéro, quartier, produit et montant. Il appelle, confirme et livre.</span></div>
+          <button className="btn primary" onClick={() => setSheet({ k: 'hand', list: calls })}>📲 Confier les {calls.length} appels à un livreur</button></div>}
         {group('1. Appeler', calls, 'du plus ancien au plus récent')}
         {group('2. Envoyer', toShip)}
         {group('3. Chez le livreur', road)}
@@ -139,9 +139,49 @@ export default function Orders({ shop, toast }: { shop: any; toast: (m: string) 
         noAnswer={() => noAnswer(sheet.o)} badges={badges(sheet.o)} />}
       {sheet?.k === 'ship' && <ShipSheet o={sheet.o} shop={shop} onClose={() => setSheet(null)}
         assign={(id: string, name: string) => update(sheet.o, { driver_id: id, status: 'en_route' }, 'Colis confié à ' + name)} />}
+      {sheet?.k === 'hand' && <HandSheet list={sheet.list} shop={shop} toast={toast} onClose={() => setSheet(null)} onDone={() => { setSheet(null); load(); }} />}
       {sheet?.k === 'result' && <ResultSheet o={sheet.o} onClose={() => setSheet(null)} update={update} />}
       {sheet?.k === 'pickup' && <PickupSheet o={sheet.o} onClose={() => setSheet(null)} update={update} toast={toast} />}
     </>
+  );
+}
+
+// Les livreurs appellent eux-mêmes les clients : la liste part sur leur WhatsApp et les commandes leur sont attribuées.
+function HandSheet({ list, shop, toast, onClose, onDone }: any) {
+  const [drivers, setDrivers] = useState<any[] | null>(null); const [pick, setPick] = useState(''); const [busy, setBusy] = useState(false);
+  useEffect(() => { (async () => {
+    const { data } = await sb().from('shop_members').select('id,display_name,phone,area,status').eq('shop_id', shop.id).eq('role', 'driver').neq('status', 'removed').order('display_name');
+    setDrivers(data || []); if (data?.length === 1) setPick(data[0].id);
+  })(); }, [shop.id]);
+  const d = (drivers || []).find((x) => x.id === pick);
+  const place = (o: any) => (o.delivery_zones?.mode === 'bus' ? (o.city || o.delivery_zones?.city) + ' (car ' + (o.delivery_zones?.label || '') + ')' : o.landmark);
+  const text = d ? 'Bonjour ' + d.display_name.split(' ')[0] + ', voici ' + (list.length > 1 ? 'les ' + list.length + ' clients' : 'le client') + ' à appeler pour ' + shop.name + ' :\n\n'
+    + list.map((o: any, i: number) => (i + 1) + ') N° ' + o.number + ' · ' + o.customer_name + ' · 📞 ' + fmtPhone(o.customer_phone)
+      + '\n   📍 ' + place(o) + (o.customer_lat ? ' · https://maps.google.com/?q=' + o.customer_lat + ',' + o.customer_lng : '')
+      + '\n   📦 ' + itemsText(o) + ' · 💵 ' + fmt(total(o)) + ' à encaisser' + (o.call_slot && o.call_slot !== 'indifferent' ? '\n   ⏰ préfère être appelé le ' + o.call_slot : '')).join('\n\n')
+    + '\n\nAppelle chaque client, confirme l’adresse et l’heure, puis livre. Réponds-moi avec les numéros : ✅ confirmé · 📵 pas de réponse · ❌ annulé.' : '';
+  async function send() {
+    if (!d) return; setBusy(true);
+    const href = waLink(d.phone, text); if (href) window.open(href, '_blank', 'noopener');
+    let ok = 0, ko = 0;
+    for (const o of list) { const { error } = await sb().from('orders').update({ driver_id: d.id }).eq('id', o.id); if (error) ko++; else ok++; }
+    setBusy(false);
+    toast(ok + ' commande' + (ok > 1 ? 's' : '') + ' confiée' + (ok > 1 ? 's' : '') + ' à ' + d.display_name + (ko ? ' · ' + ko + ' non autorisée' + (ko > 1 ? 's' : '') + ' (produits)' : ''));
+    onDone();
+  }
+  return (
+    <Sheet title={list.length > 1 ? 'Confier ' + list.length + ' appels à un livreur' : 'Confier n° ' + list[0].number + ' à un livreur'} onClose={onClose}>
+      {!drivers ? <p className="muted">Chargement…</p> : !drivers.length ? <p className="info-line t-warn">Aucun livreur. Ajoutez-en un dans « Équipe et livreurs » avec son numéro WhatsApp.</p> : <>
+        <div className="packs">{drivers.map((x) => (
+          <label key={x.id} className={'pack' + (pick === x.id ? ' on' : '')}><input type="radio" name="hd" checked={pick === x.id} onChange={() => setPick(x.id)} />
+            <span className="grow"><strong>{x.display_name}</strong><span className="muted">{x.phone ? '+223 ' + fmtPhone(x.phone) : 'pas de numéro'}{x.area ? ' · ' + x.area : ''}{x.status !== 'active' ? ' · pas encore connecté à l’app' : ''}</span></span></label>))}</div>
+        {d && <><p className="muted" style={{ margin: '12px 0 6px' }}>Message envoyé sur son WhatsApp :</p><div className="msg" style={{ whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>{text}</div></>}
+        <div className="stack" style={{ marginTop: 14 }}>
+          <button className="btn primary wide" disabled={!d || busy || !waLink(d?.phone, 'x')} onClick={send}>{busy ? 'Envoi…' : 'Envoyer sur WhatsApp à ' + (d?.display_name.split(' ')[0] || 'livreur')}</button>
+          {d && <button className="btn wide" onClick={() => copy(text, toast, 'Message copié')}>Copier le message</button>}
+        </div>
+        <p className="muted" style={{ marginTop: 10 }}>Quand il vous répond, ouvrez chaque commande et touchez « Le client confirme », « Pas de réponse » ou « Le client annule ». Le livreur reste choisi pour la livraison.</p></>}
+    </Sheet>
   );
 }
 

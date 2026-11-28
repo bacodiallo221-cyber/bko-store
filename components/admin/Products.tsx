@@ -1,4 +1,6 @@
 'use client';
+import { CATEGORY_GROUPS, ALL_CATEGORIES, groupIcon } from '@/lib/categories';
+import { norm } from '@/lib/places';
 import { useCallback, useEffect, useState } from 'react';
 import { sb } from '@/lib/supabase';
 import { fmt, errText } from '@/lib/format';
@@ -7,9 +9,12 @@ import { Sheet, copy, uploadFile } from './ui';
 export default function Products({ shop, toast }: { shop: any; toast: (m: string) => void }) {
   const [list, setList] = useState<any[] | null>(null); const [edit, setEdit] = useState<any>(null);
   const [reviews, setReviews] = useState<any>(null); const [adLink, setAdLink] = useState<any>(null);
+  const [cats, setCats] = useState<any[]>([]); const [catEdit, setCatEdit] = useState(false); const [filter, setFilter] = useState('');
   const load = useCallback(async () => {
-    const { data, error } = await sb().from('products').select('*, product_offers(*)').eq('shop_id', shop.id).order('created_at', { ascending: false });
-    if (error) return toast(errText(error)); setList(data || []);
+    const [{ data, error }, c] = await Promise.all([
+      sb().from('products').select('*, product_offers(*)').eq('shop_id', shop.id).order('created_at', { ascending: false }),
+      sb().from('categories').select('*').eq('shop_id', shop.id).order('sort').order('name')]);
+    if (error) return toast(errText(error)); setList(data || []); setCats(c.data || []);
   }, [shop.id, toast]);
   useEffect(() => { load(); }, [load]);
   async function stock(p: any, d: number) {
@@ -19,12 +24,14 @@ export default function Products({ shop, toast }: { shop: any; toast: (m: string
   }
   return (
     <>
-      <div className="toolbar"><span className="muted">{list ? list.length + ' produit(s)' : ''}</span><button className="btn primary" onClick={() => setEdit({})}>+ Ajouter un produit</button></div>
+      <div className="toolbar"><span className="muted">{list ? list.length + ' produit(s)' : ''}</span>
+        <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><button className="btn" onClick={() => setCatEdit(true)}>Catégories ({cats.length})</button><button className="btn primary" onClick={() => setEdit({})}>+ Ajouter un produit</button></span></div>
+      {cats.length > 0 && <div className="cat-chips"><a href="#" className={!filter ? 'on' : ''} onClick={(e) => { e.preventDefault(); setFilter(''); }}>Tous</a>{cats.map((c) => <a key={c.id} href="#" className={filter === c.id ? 'on' : ''} onClick={(e) => { e.preventDefault(); setFilter(c.id); }}>{c.name}</a>)}</div>}
       {!list ? <p className="muted">Chargement…</p> : !list.length ? <p className="empty" style={{ marginTop: 12 }}>Aucun produit. Ajoutez le premier.</p> :
-        <ul className="rows">{list.map((p) => (
+        <ul className="rows">{list.filter((p) => !filter || p.category_id === filter).map((p) => (
           <li key={p.id}>
             <span className="pic" style={{ width: 52, aspectRatio: '1', fontSize: 14 }}>{p.images?.[0] ? <img src={p.images[0]} alt="" /> : p.name.slice(0, 2).toUpperCase()}</span>
-            <div className="grow"><strong>{p.name}</strong>{!p.active && <span className="badge t-mute" style={{ marginLeft: 6 }}>Masqué</span>}
+            <div className="grow"><strong>{p.name}</strong>{p.category_id && <span className="badge t-info" style={{ marginLeft: 6 }}>{cats.find((c) => c.id === p.category_id)?.name}</span>}{!p.active && <span className="badge t-mute" style={{ marginLeft: 6 }}>Masqué</span>}
               {p.promo_ends_at && new Date(p.promo_ends_at) > new Date() && <span className="badge t-warn" style={{ marginLeft: 6 }}>Promo en cours</span>}
               <span className="muted">Vendu {fmt(p.price)}{p.compare_price ? ' (au lieu de ' + fmt(p.compare_price) + ')' : ''} · acheté {fmt(p.cost)} · marge {fmt(p.price - p.cost)}</span></div>
             <span className={'pill t-' + (p.stock <= 0 ? 'bad' : p.stock <= 5 ? 'warn' : 'ok')}>{p.stock <= 0 ? 'Épuisé' : p.stock <= 5 ? 'Stock bas' : 'En stock'}</span>
@@ -36,7 +43,8 @@ export default function Products({ shop, toast }: { shop: any; toast: (m: string
             <button className="btn sm" onClick={() => setReviews(p)}>Avis</button>
             <button className="btn sm primary" onClick={() => setEdit(p)}>Modifier</button>
           </li>))}</ul>}
-      {edit && <ProductForm shop={shop} p={edit} all={list || []} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); toast('Produit enregistré'); }} />}
+      {catEdit && <CategoriesSheet shop={shop} cats={cats} toast={toast} onClose={() => setCatEdit(false)} onChanged={load} />}
+      {edit && <ProductForm shop={shop} p={edit} all={list || []} cats={cats} onCats={load} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); toast('Produit enregistré'); }} />}
       {reviews && <Reviews shop={shop} p={reviews} toast={toast} onClose={() => setReviews(null)} />}
       {adLink && <AdLink p={adLink} toast={toast} onClose={() => setAdLink(null)} />}
     </>
@@ -74,14 +82,21 @@ function toLocal(iso?: string | null) {
   return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()) + 'T' + z(d.getHours()) + ':' + z(d.getMinutes());
 }
 
-function ProductForm({ shop, p, all, onClose, onSaved }: any) {
+function ProductForm({ shop, p, all, cats, onCats, onClose, onSaved }: any) {
   const offer = (q: number) => (p.product_offers || []).find((o: any) => o.quantity === q)?.bundle_price || '';
   const [f, setF] = useState<any>({
     name: p.name || '', tagline: p.tagline || '', price: p.price || '', compare: p.compare_price || '', cost: p.cost ?? '', stock: p.stock ?? '',
     option_label: p.option_label || 'Couleur', options: (p.options || ['Standard']).join(', '), description: p.description || '', images: p.images || [],
     pack2: offer(2), pack3: offer(3), upsell: p.upsell_product_id || '', discount: p.upsell_discount ?? 20, active: p.active ?? true,
-    promo: toLocal(p.promo_ends_at), stock_display: p.stock_display || 'low', low_at: p.low_stock_at ?? 10,
+    promo: toLocal(p.promo_ends_at), stock_display: p.stock_display || 'low', low_at: p.low_stock_at ?? 10, category_id: p.category_id || '',
   });
+  const [newCat, setNewCat] = useState<string | null>(null);
+  async function createCat(preset?: string) {
+    const name = (preset || newCat || '').trim(); if (name.length < 2) return;
+    const { data, error } = await sb().from('categories').insert({ shop_id: shop.id, name, slug: slugify(name), sort: cats.length }).select().single();
+    if (error) return setErr(String(error.message).includes('duplicate') ? 'Cette catégorie existe déjà.' : errText(error));
+    setF((x: any) => ({ ...x, category_id: data.id })); setNewCat(null); onCats();
+  }
   const [blocks, setBlocks] = useState<Block[]>(p.blocks || []);
   const [err, setErr] = useState(''); const [busy, setBusy] = useState(false); const [up, setUp] = useState('');
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
@@ -121,7 +136,7 @@ function ProductForm({ shop, p, all, onClose, onSaved }: any) {
     const row = { shop_id: shop.id, name: f.name.trim(), tagline: f.tagline.trim() || null, price, compare_price: compare, cost, stock,
       option_label: f.option_label || 'Variante', options: options.length ? options : ['Standard'], description: f.description, images: f.images,
       upsell_product_id: f.upsell || null, upsell_discount: Number(f.discount) || 0, active: !!f.active,
-      promo_ends_at: f.promo ? new Date(f.promo).toISOString() : null, stock_display: f.stock_display, low_stock_at: Number(f.low_at) || 10, blocks: clean };
+      promo_ends_at: f.promo ? new Date(f.promo).toISOString() : null, category_id: f.category_id || null, stock_display: f.stock_display, low_stock_at: Number(f.low_at) || 10, blocks: clean };
     setBusy(true);
     const res = p.id ? await sb().from('products').update(row).eq('id', p.id).select().single() : await sb().from('products').insert(row).select().single();
     if (res.error) { setBusy(false); return setErr(errText(res.error)); }
@@ -137,6 +152,13 @@ function ProductForm({ shop, p, all, onClose, onSaved }: any) {
       <form onSubmit={save}>
         <p className="kicker">1 · L’essentiel</p>
         <div className="field" style={{ marginTop: 6 }}><label htmlFor="pn">Nom</label><input id="pn" value={f.name} onChange={set('name')} /></div>
+        <div className="field"><label htmlFor="pk2">Catégorie / collection</label>
+          {newCat === null ? <select id="pk2" value={f.category_id} onChange={(e) => { const v = e.target.value; if (v === '__new') setNewCat(''); else if (v.startsWith('p:')) createCat(v.slice(2)); else setF({ ...f, category_id: v }); }}>
+            <option value="">Aucune</option>
+            {cats.length > 0 && <optgroup label="Vos catégories">{cats.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>}
+            {CATEGORY_GROUPS.map(([g, l]) => { const rest = l.filter((n) => !cats.some((c: any) => norm(c.name) === norm(n))); return rest.length ? <optgroup key={g} label={groupIcon(g) + ' ' + g}>{rest.map((n) => <option key={n} value={'p:' + n}>{n}</option>)}</optgroup> : null; })}
+            <option value="__new">+ Autre catégorie (à nommer)…</option></select>
+            : <div style={{ display: 'flex', gap: 8 }}><input autoFocus value={newCat} onChange={(e) => setNewCat(e.target.value)} placeholder="Ex. Maison, Beauté, Électronique" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); createCat(); } }} /><button type="button" className="btn sm primary" onClick={() => createCat()}>Créer</button><button type="button" className="btn sm" onClick={() => setNewCat(null)}>Annuler</button></div>}</div>
         <div className="field"><label htmlFor="pt">Accroche (une phrase sous le nom)</label><input id="pt" value={f.tagline} onChange={set('tagline')} placeholder="Ex. Marchez 30 minutes chaque soir, sans sortir de chez vous." /></div>
         <div className="two"><div className="field"><label htmlFor="pp">Prix de vente (FCFA)</label><input id="pp" inputMode="numeric" value={f.price} onChange={set('price')} /></div>
           <div className="field"><label htmlFor="pb">Prix barré (facultatif)</label><input id="pb" inputMode="numeric" value={f.compare} onChange={set('compare')} placeholder="Prix habituel" /></div></div>
@@ -235,6 +257,44 @@ function Reviews({ shop, p, toast, onClose }: any) {
         {r.image_url && <img src={r.image_url} alt="" style={{ width: 44, height: 44, objectFit: 'cover' }} />}
         <div className="grow"><strong>{r.author}</strong> <span style={{ color: '#E0A100' }}>{'★'.repeat(r.rating)}</span><span className="muted">{r.city}{r.body ? ' · ' + r.body : ''}</span></div>
         <button className="btn sm" onClick={() => toggle(r)}>{r.visible ? 'Masquer' : 'Afficher'}</button><button className="btn sm danger" onClick={() => del(r)}>Supprimer</button></li>)}</ul>
+    </Sheet>
+  );
+}
+
+const slugify = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'collection';
+
+function CategoriesSheet({ shop, cats, toast, onClose, onChanged }: any) {
+  const [name, setName] = useState(''); const [err, setErr] = useState('');
+  async function add(e: React.FormEvent) {
+    e.preventDefault(); setErr(''); const n = name.trim(); if (n.length < 2) return setErr('Nom trop court.');
+    const { error } = await sb().from('categories').insert({ shop_id: shop.id, name: n, slug: slugify(n), sort: cats.length });
+    if (error) return setErr(String(error.message).includes('duplicate') ? 'Cette catégorie existe déjà.' : errText(error)); setName(''); onChanged();
+  }
+  async function quick(n: string) {
+    const { error } = await sb().from('categories').insert({ shop_id: shop.id, name: n, slug: slugify(n), sort: cats.length });
+    if (error) return setErr(String(error.message).includes('duplicate') ? 'Cette catégorie existe déjà.' : errText(error)); onChanged();
+  }
+  async function move(c: any, d: number) {
+    const i = cats.findIndex((x: any) => x.id === c.id), j = i + d; if (j < 0 || j >= cats.length) return;
+    await Promise.all([sb().from('categories').update({ sort: j }).eq('id', c.id), sb().from('categories').update({ sort: i }).eq('id', cats[j].id)]); onChanged();
+  }
+  async function del(c: any) { const { error } = await sb().from('categories').delete().eq('id', c.id); if (error) return toast(errText(error)); toast('Catégorie supprimée (les produits restent)'); onChanged(); }
+  async function pic(c: any, e: any) { const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; try { const url = await uploadFile(sb(), shop.id, file, 'categories'); await sb().from('categories').update({ image_url: url }).eq('id', c.id); onChanged(); } catch (x: any) { toast(x.message); } }
+  return (
+    <Sheet title="Catégories et collections" onClose={onClose}>
+      <p className="muted">Chaque catégorie a sa page dans la boutique et apparaît dans le menu. Ordre : flèches.</p>
+      <form onSubmit={add} style={{ display: 'flex', gap: 8, marginTop: 10 }}><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nouvelle catégorie" style={{ flex: 1 }} /><button className="btn primary">Ajouter</button></form>
+      {err && <p className="err">{err}</p>}
+      <details style={{ marginTop: 10 }}><summary className="muted" style={{ cursor: 'pointer' }}>Ajouter depuis la liste complète ({ALL_CATEGORIES.length} catégories)</summary>
+        {CATEGORY_GROUPS.map(([g, l]) => <div key={g} style={{ marginTop: 10 }}><b style={{ fontSize: 13 }}>{groupIcon(g)} {g}</b>
+          <div className="cat-chips" style={{ marginTop: 6 }}>{l.map((n) => { const has = cats.some((c: any) => norm(c.name) === norm(n)); return <a key={n} href="#" className={has ? 'on' : ''} onClick={(e) => { e.preventDefault(); if (!has) quick(n); }}>{has ? '✓ ' : '+ '}{n}</a>; })}</div></div>)}
+      </details>
+      <ul className="rows">{cats.map((c: any, i: number) => (
+        <li key={c.id}>{c.image_url ? <img src={c.image_url} alt="" style={{ width: 44, height: 44, objectFit: 'cover' }} /> : null}
+          <div className="grow"><strong>{c.name}</strong><span className="muted">/collection/{c.slug}</span></div>
+          <button className="btn sm" aria-label="Monter" disabled={i === 0} onClick={() => move(c, -1)}>↑</button><button className="btn sm" aria-label="Descendre" disabled={i === cats.length - 1} onClick={() => move(c, 1)}>↓</button>
+          <label className="btn sm" style={{ cursor: 'pointer' }}>Image<input type="file" hidden accept="image/*" onChange={(e) => pic(c, e)} /></label>
+          <button className="btn sm danger" onClick={() => del(c)}>Supprimer</button></li>))}</ul>
     </Sheet>
   );
 }

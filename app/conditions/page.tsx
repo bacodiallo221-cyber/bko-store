@@ -7,7 +7,7 @@ export default async function Conditions() {
   const store = await getStore(); if (!store) return <NotReady />;
   const s = store.shop, d = s.refund_days || 2;
   return (
-    <main className="wrap"><Header shop={s} />
+    <main className="wrap"><Header shop={s} categories={store.categories} />
       <article className="doc"><h1 style={{ marginTop: 20 }}>Conditions de vente</h1>
         <h2>Prix</h2><p>Prix en FCFA. Les frais de livraison sont affichés avant la validation et inclus dans le total à payer.</p>
         <h2>Commande</h2><p>Vous vérifiez le récapitulatif avant de valider. Une confirmation avec le détail de la commande vous est ensuite donnée et envoyée.</p>

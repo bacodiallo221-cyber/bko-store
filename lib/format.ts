@@ -4,7 +4,7 @@ export const fmt = (n: number) => num(n) + ' FCFA';
 export function promise(z: any) {
   if (!z) return '';
   if (z.mode === 'bus') return 'Envoi par car ' + (z.carrier || '') + ' · retrait à la gare de ' + z.city + ' sous ' + (z.delay_days <= 2 ? '24 à 48 h' : '48 à 72 h');
-  if (z.delay_days <= 1) return new Date().getHours() < 14 ? 'Livré demain si vous commandez avant 14 h' : 'Livré après-demain';
+  if (z.delay_days <= 1) return 'Livré en moins de 24 h à ' + (z.city || 'Bamako');
   return 'Livré sous ' + (z.delay_days === 2 ? '24 à 48 h' : '48 à 72 h');
 }
 
@@ -12,6 +12,7 @@ export const zoneName = (z: any) => (z ? (z.city === 'Bamako' ? 'Bamako, ' + z.l
 
 // Codes d'erreur renvoyés par la base -> message pour le client
 const ERR: Record<string, string> = {
+  BLOCKED: 'Ce numéro ne peut plus commander en ligne. Contactez-nous sur WhatsApp.',
   CLIENT_REQUIRED: 'Entrez le nom du client.', ITEMS_REQUIRED: 'Ajoutez au moins une ligne.', BAD_ITEM: 'Vérifiez les lignes : désignation, quantité (au moins 1) et prix.',
   shops_accent_chk: 'Couleur invalide.',
   READY_REQUIRED: 'Cochez la case pour confirmer que vous recevrez et paierez le colis.',
@@ -20,7 +21,7 @@ const ERR: Record<string, string> = {
   BAD_ZONE: 'Choisissez votre ville et commune.',
   BAD_PHONE: 'Numéro non valide : 8 chiffres d’un opérateur malien, ou avec +223.',
   BAD_NAME: 'Entrez votre nom et prénom.',
-  BAD_LANDMARK: 'Indiquez votre quartier et un repère.',
+  BAD_LANDMARK: 'Indiquez votre quartier.',
   TOO_MANY_ORDERS: 'Trop de commandes avec ce numéro en peu de temps. Réessayez dans quelques minutes.',
   OUT_OF_STOCK: 'Désolé, ce produit vient d’être épuisé pour cette quantité.',
   PRODUCT_NOT_FOUND: 'Ce produit n’est plus disponible.',

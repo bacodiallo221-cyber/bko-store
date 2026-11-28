@@ -8,11 +8,11 @@ import { SOUNDS, playSound, getPref, setPref } from '@/lib/sounds';
 const PHONES = ['whatsapp', 'phone2', 'phone3', 'owner_phone'];
 const FIELDS: [string, string, string][] = [
   ['name', 'Nom de la boutique', 'BKO-STORE'], ['whatsapp', 'Numéro principal (WhatsApp)', '71 89 56 70'],
-  ['phone2', 'Numéro secondaire', '71 88 84 09'], ['phone3', 'Autre numéro', '74 06 34 99'],
+  ['phone2', 'Numéro secondaire', '71 88 84 09'], ['phone3', 'Autre numéro (facultatif)', ''],
   ['owner_phone', 'Votre numéro perso (jamais affiché)', '66 24 76 71'],
   ['legal_name', 'Responsable ou société', 'Souleymane Diallo'], ['rccm', 'N° RCCM (facultatif)', ''], ['nif', 'NIF (facultatif)', ''],
   ['address', 'Adresse', 'Hamdallaye ACI, Bamako'], ['email', 'E-mail', 'contact@boutique.ml'],
-  ['announcement', 'Bandeau d’annonce (haut de la boutique)', 'Livraison rapide partout au Mali · Payez à la réception'], ['delivery_promise', 'Délai de livraison affiché', '24 à 48 h'],
+  ['announcement', 'Bandeau d’annonce (haut de la boutique)', 'Livraison rapide partout au Mali · Payez à la réception'], ['delivery_promise', 'Délai de livraison affiché', 'moins de 24 h'],
   ['apdp_number', 'N° de déclaration APDP (facultatif)', ''], ['refund_days', 'Satisfait ou remboursé (jours)', '2'],
   ['pixel_meta', 'Pixel Meta (ID)', ''], ['pixel_tiktok', 'Pixel TikTok (ID)', ''],
 ];

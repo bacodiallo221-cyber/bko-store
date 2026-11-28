@@ -16,13 +16,13 @@ export default async function Aide() {
     ['Comment commander ?', 'Choisissez votre produit, remplissez quatre champs (nom, téléphone, quartier, repère) et validez. Aucun paiement en ligne, aucun compte à créer.'],
     ['Quand est-ce que je paie ?', 'Seulement à la livraison, en espèces, après avoir vérifié votre colis. Vous ne payez rien à l’avance.'],
     ['Est-ce que vous m’appelez ?', 'Oui : nous vous appelons pour confirmer la commande et le lieu de livraison, au créneau que vous avez choisi. Gardez votre téléphone allumé.'],
-    ['Combien de temps pour être livré ?', 'À Bamako : ' + (s.delivery_promise || '24 à 48 h') + '. Dans les régions, le colis voyage par car et vous le récupérez à la gare de votre ville ; nous vous appelons à son arrivée.'],
+    ['Combien de temps pour être livré ?', 'À Bamako : en moins de 24 h' + '. Dans les régions, le colis voyage par car et vous le récupérez à la gare de votre ville ; nous vous appelons à son arrivée.'],
     ['Comment suivre ma commande ?', 'Avec votre numéro de commande et votre téléphone, sur la page « Suivre ma commande ».'],
     ['Je peux modifier ou annuler ?', 'Oui, tant que le colis n’est pas parti : écrivez-nous sur WhatsApp avec votre numéro de commande.'],
   ];
   const wa = waLink(s.whatsapp, 'Bonjour, j’ai une question sur ma commande.');
   return (
-    <main className="wrap"><Header shop={s} />
+    <main className="wrap"><Header shop={s} categories={store.categories} active="aide" />
       <section className="hero"><span className="kicker">Aide</span><h1>Tout savoir avant de commander</h1>
         <p>Paiement, livraison, retours : les réponses aux questions qu’on nous pose le plus.</p></section>
       <ol className="how">
@@ -40,7 +40,7 @@ export default async function Aide() {
             <tbody>{[...bamako, ...others].map((z: any) => <tr key={z.id}>
               <td><strong>{z.city === 'Bamako' ? 'Bamako · ' + z.label : z.label}</strong></td>
               <td>{z.mode === 'bus' ? 'Par car' + (z.carrier ? ' (' + z.carrier + ')' : '') + ', retrait à la gare' : 'Livreur à domicile'}</td>
-              <td>{z.delay_days <= 1 ? '24 h' : z.delay_days + ' jours'}</td>
+              <td>{z.delay_days <= 1 ? 'Moins de 24 h' : z.delay_days + ' jours'}</td>
               <td className="mono" style={{ textAlign: 'right' }}>{fmt(z.fee)}</td></tr>)}</tbody>
           </table></div>}
         <p className="muted" style={{ marginTop: 8 }}>Certains packs ont la livraison offerte : c’est indiqué sur la page du produit.</p>

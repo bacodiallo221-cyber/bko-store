@@ -8,7 +8,7 @@ export default async function Mentions() {
   const store = await getStore(); if (!store) return <NotReady />;
   const s = store.shop;
   return (
-    <main className="wrap"><Header shop={s} />
+    <main className="wrap"><Header shop={s} categories={store.categories} />
       <article className="doc"><h1 style={{ marginTop: 20 }}>Mentions légales</h1>
         <ul>
           <li>Boutique : <V v={s.name} /></li><li>Responsable : <V v={s.legal_name} /></li>

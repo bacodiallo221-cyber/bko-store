@@ -7,7 +7,7 @@ export default async function Privacy() {
   const store = await getStore(); if (!store) return <NotReady />;
   const s = store.shop;
   return (
-    <main className="wrap"><Header shop={s} />
+    <main className="wrap"><Header shop={s} categories={store.categories} />
       <article className="doc"><h1 style={{ marginTop: 20 }}>Politique de confidentialité</h1>
         <p className="muted">Selon la loi n° 2013-015 du 21 mai 2013 sur les données personnelles et la loi n° 2016-012 sur les transactions électroniques.</p>
         <h2>Qui est responsable</h2><p>{s.name}{s.legal_name ? ' (' + s.legal_name + ')' : ''}{s.address ? ', ' + s.address : ''}. Contact : {s.whatsapp || '—'}{s.email ? ' · ' + s.email : ''}.{s.apdp_number ? ' Traitement déclaré à l’APDP sous le n° ' + s.apdp_number + '.' : ''}</p>
